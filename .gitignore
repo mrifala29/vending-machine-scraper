@@ -1,0 +1,93 @@
+# Environment Variables (PENTING - berisi credentials!)
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*.bak
+.DS_Store
+
+# Logs
+logs/
+*.log
+log/
+
+# Data Files (JSON hasil scraping)
+data/
+data/*.json
+data/backup/*.json
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+tests/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Selenium
+geckodriver.log
+chromedriver.log
+
+# OS
+Thumbs.db
+.DS_Store
+*~
+
+# Temporary files
+*.tmp
+temp/
+tmp/
+
+# Backup files
+*.backup
+*.bak-*
+
+# Debian packages
+*.deb
+
+# Shell scripts (optional, uncomment if needed)
+# *.sh

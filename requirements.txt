@@ -1,0 +1,31 @@
+# Web Scraping
+selenium==4.15.2
+beautifulsoup4==4.12.2
+lxml==4.9.3
+requests==2.31.0
+webdriver-manager==4.0.1
+undetected-chromedriver==3.5.4
+setuptools>=65.0.0
+psutil>=5.9.0
+
+# Data Handling
+pydantic==2.5.0
+python-dotenv==1.0.0
+
+# ClickHouse
+clickhouse-connect==0.8.14
+
+# Scheduling
+APScheduler==3.10.4
+
+# Process Management
+psutil==5.9.8
+
+# Utilities
+python-dateutil==2.8.2
+
+# Development & Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+black==23.12.1
+flake8==6.1.0
