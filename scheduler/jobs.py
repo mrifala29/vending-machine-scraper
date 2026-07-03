@@ -132,6 +132,7 @@ def _execute_sales_scraping(
         if Config.clickhouse_enabled():
             logger.info("Step 5: Inserting data into ClickHouse")
             from storage.clickhouse_storage import ClickHouseStorage
+            force_overwrite = Config.get_force_overwrite()
             ch_storage = ClickHouseStorage(
                 host=Config.CLICKHOUSE_HOST,
                 port=Config.CLICKHOUSE_PORT,
@@ -142,7 +143,12 @@ def _execute_sales_scraping(
             )
             try:
                 ch_storage.connect()
-                ch_inserted = ch_storage.insert_all(all_data, start_date=start_date, end_date=end_date)
+                ch_inserted = ch_storage.insert_all(
+                    all_data,
+                    start_date=start_date,
+                    end_date=end_date,
+                    force_overwrite=force_overwrite,
+                )
                 logger.info(f"ClickHouse: inserted {ch_inserted} total rows across all tables")
             except Exception as ch_exc:
                 logger.error(f"ClickHouse insert failed: {ch_exc}", exc_info=True)

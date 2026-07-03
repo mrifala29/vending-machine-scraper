@@ -194,13 +194,19 @@ class ClickHouseStorage:
         data: SalesStatisticData,
         start_date: datetime,
         end_date: datetime,
+        force_overwrite: bool = False,
     ) -> int:
         """
         Insert all records from one SalesStatisticData into the matching ClickHouse table.
         Returns number of rows inserted.
-        
-        Important: Uses record.scrape_date (from the date range being scraped), not scrape_timestamp.date().
-        This prevents data loss when running with --yesterday or other date overrides.
+
+        Args:
+            data: Scraped data for one submenu/table.
+            start_date: Start of date range (used for delete-before-insert).
+            end_date: End of date range.
+            force_overwrite: If True, bypass history lock and overwrite existing data.
+                             Set this to True when running manual backfill/repair jobs
+                             (e.g., python main.py --start-date 2026-07-01 --end-date 2026-07-01).
         """
         self._ensure_connected()
 
@@ -219,11 +225,8 @@ class ClickHouseStorage:
 
         rows: list[list] = []
         for record in data.records:
-            # Use record.scrape_date (from the date range being scraped) instead of scrape_timestamp.date()
-            # This ensures data is stored with the correct date, preventing data loss with --yesterday
             scrape_d = record.scrape_date
             ts: datetime = record.scrape_timestamp
-            # Normalise to UTC naive datetime (ClickHouse DateTime stores as UTC by default)
             if ts.tzinfo is not None:
                 ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
 
@@ -232,27 +235,29 @@ class ClickHouseStorage:
                 row.append(record.data.get(cn_name) or None)
             rows.append(row)
 
-        # HISTORY LOCK (2026-05-23): never overwrite a day already loaded.
-        # If this sales day already has rows in ClickHouse, SKIP entirely -
-        # no delete, no insert. Backfilled history is never clobbered by the
-        # morning cron. A day must be cleared manually to be re-scraped.
-        _locked = self._client.command(
-            f"SELECT count() FROM {self._database}.{submenu} "
-            f"WHERE scrape_date = '{data.scrape_date}'"
-        )
-        if int(_locked) > 0:
-            logger.info(
-                f"  {submenu}: scrape_date {data.scrape_date} already has "
-                f"{_locked} rows - skipping (history lock)"
+        # HISTORY LOCK: never silently overwrite a day already loaded by normal daily cron.
+        # Bypassed when force_overwrite=True (manual repair runs).
+        if not force_overwrite:
+            _locked = self._client.command(
+                f"SELECT count() FROM {self._database}.{submenu} "
+                f"WHERE scrape_date = '{data.scrape_date}'"
             )
-            return 0
+            if int(_locked) > 0:
+                logger.info(
+                    f"  {submenu}: scrape_date {data.scrape_date} already has "
+                    f"{_locked} rows - skipping (history lock). "
+                    f"Use --force-overwrite to replace."
+                )
+                return 0
+        else:
+            logger.info(f"  {submenu}: force_overwrite=True, deleting existing rows for {data.scrape_date}")
 
-        # Delete stale rows for this date range first (idempotent re-runs)
-        # Use data.scrape_date to delete only that specific date's data
+        # Delete stale rows for this date before inserting (idempotent)
         from datetime import datetime as datetime_class
-        scrape_date_as_datetime = datetime_class.combine(data.scrape_date, datetime_class.min.time()).replace(tzinfo=timezone.utc)
-        end_date_as_datetime = scrape_date_as_datetime  # Delete only this specific date
-        self.delete_for_date_range(submenu, scrape_date_as_datetime, end_date_as_datetime)
+        scrape_date_as_datetime = datetime_class.combine(
+            data.scrape_date, datetime_class.min.time()
+        ).replace(tzinfo=timezone.utc)
+        self.delete_for_date_range(submenu, scrape_date_as_datetime, scrape_date_as_datetime)
 
         self._client.insert(
             f"{self._database}.{submenu}",
@@ -267,16 +272,21 @@ class ClickHouseStorage:
         all_data: List[SalesStatisticData],
         start_date: datetime,
         end_date: datetime,
+        force_overwrite: bool = False,
     ) -> int:
         """
         Insert data for all submenus. Returns total rows inserted.
         Raises on connection errors; per-table errors are logged and skipped.
+
+        Args:
+            force_overwrite: Bypass history lock, overwrite existing rows.
+                             Pass True for manual repair/backfill runs.
         """
         self._ensure_connected()
         total = 0
         for data in all_data:
             try:
-                total += self.insert_submenu(data, start_date, end_date)
+                total += self.insert_submenu(data, start_date, end_date, force_overwrite=force_overwrite)
             except Exception as exc:
                 logger.error(f"Failed to insert {data.submenu} into ClickHouse: {exc}")
         return total
