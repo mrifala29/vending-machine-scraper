@@ -75,6 +75,11 @@ class Config:
         """Returns True if ClickHouse host is configured."""
         return bool(cls.CLICKHOUSE_HOST)
 
+    @classmethod
+    def get_force_overwrite(cls) -> bool:
+        """Returns True if FORCE_OVERWRITE is enabled."""
+        return os.getenv("FORCE_OVERWRITE", "false").lower() == "true"
+
     # Helper methods - Parse dates and target URLs
     @staticmethod
     def _parse_date(date_str: str) -> datetime:

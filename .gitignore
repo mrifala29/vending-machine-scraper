@@ -90,4 +90,4 @@ tmp/
 *.deb
 
 # Shell scripts (optional, uncomment if needed)
-# *.sh
+*.sh

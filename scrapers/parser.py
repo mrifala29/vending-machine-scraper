@@ -2,6 +2,7 @@
 HTML parser for extracting sales data from website tables.
 """
 import time
+import random
 from bs4 import BeautifulSoup
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
@@ -175,6 +176,65 @@ class DataExtractor:
             return False
 
     @staticmethod
+    def _wait_for_ajax_complete(driver, timeout: int = 15) -> bool:
+        """
+        Wait for AJAX request to complete by checking multiple indicators.
+        For SPA pagination without URL change.
+        
+        Returns:
+            True if AJAX completed, False if timeout
+        """
+        from selenium.webdriver.support.ui import WebDriverWait
+        import time
+        
+        start_time = time.time()
+        
+        # Strategy 1: Wait for jQuery if available
+        try:
+            WebDriverWait(driver, 2).until(
+                lambda d: d.execute_script("return typeof jQuery !== 'undefined' && jQuery.active === 0")
+            )
+            logger.debug("AJAX complete (jQuery check)")
+            return True
+        except Exception:
+            logger.debug("jQuery not available or check failed")
+        
+        # Strategy 2: Check if table tbody is updating (stale element means DOM updated)
+        try:
+            old_tbody = driver.find_element(By.CSS_SELECTOR, "table tbody")
+            time.sleep(1.5)  # Give AJAX time to start
+            
+            # Try to interact with old element - if stale, it means DOM updated
+            try:
+                _ = old_tbody.tag_name
+                # Element still fresh after delay - AJAX might not have started yet
+                logger.debug("Table tbody still fresh, waiting longer...")
+                time.sleep(2)
+            except StaleElementReferenceException:
+                # Perfect! Element became stale = DOM updated
+                logger.debug("Table tbody updated (stale element detected)")
+                pass
+        except Exception as e:
+            logger.debug(f"Tbody check failed: {e}")
+        
+        # Strategy 3: Wait for new tbody to be present and populated
+        try:
+            elapsed = time.time() - start_time
+            remaining = max(1, timeout - int(elapsed))
+            
+            WebDriverWait(driver, remaining).until(
+                lambda d: len(d.find_elements(By.CSS_SELECTOR, "table tbody tr")) > 0
+            )
+            logger.debug("New table rows detected")
+            return True
+        except TimeoutException:
+            logger.warning(f"AJAX did not complete within {timeout}s")
+            return False
+        except Exception as e:
+            logger.warning(f"AJAX completion check failed: {e}")
+            return False
+
+    @staticmethod
     def _has_next_page(driver) -> bool:
         """
         Returns True if a clickable 'next page' button exists.
@@ -215,8 +275,8 @@ class DataExtractor:
         """Click next page button with human-like behavior. Returns True if clicked successfully."""
         import random
         
-        # Random delay to simulate human reading time (1-2 seconds)
-        time.sleep(random.uniform(1.0, 2.0))
+        # Random delay to simulate human reading time (increased for stability)
+        time.sleep(random.uniform(2.0, 3.5))  # Increased from 1.0-2.0
         
         try:
             next_li = driver.find_element(By.CSS_SELECTOR, "li.am-pagination-next")
@@ -252,32 +312,18 @@ class DataExtractor:
                     driver.execute_script("arguments[0].click();", link)
                     logger.debug("Clicked next page button - JS click (AmyUI)")
             
-            # Wait for AJAX pagination with longer timeout for slow responses
-            time.sleep(random.uniform(2.5, 3.5))
+            # Wait for AJAX pagination with improved detection
+            time.sleep(random.uniform(1.5, 2.5))  # Initial buffer for AJAX to start
             
-            # Verify table reloaded with multiple retry attempts
-            max_verify_attempts = 3
-            for verify_attempt in range(max_verify_attempts):
-                try:
-                    WebDriverWait(driver, 12).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr"))
-                    )
-                    logger.debug(f"Table verified after pagination (AmyUI) - attempt {verify_attempt + 1}")
-                    time.sleep(random.uniform(0.5, 1.0))
-                    return True
-                except TimeoutException:
-                    if verify_attempt < max_verify_attempts - 1:
-                        logger.warning(f"Table verification timeout, retry {verify_attempt + 1}/{max_verify_attempts}")
-                        time.sleep(2)
-                        # Try refreshing the page state
-                        try:
-                            driver.execute_script("window.scrollTo(0, 0);")
-                            time.sleep(1)
-                        except:
-                            pass
-                    else:
-                        logger.warning("Table did not reload after click (AmyUI) - all retries exhausted")
-                        return False
+            # Use new AJAX completion detection
+            ajax_success = DataExtractor._wait_for_ajax_complete(driver, timeout=15)
+            if ajax_success:
+                logger.debug("AJAX pagination completed successfully (AmyUI)")
+                time.sleep(random.uniform(0.5, 1.0))
+                return True
+            else:
+                logger.warning("AJAX pagination timeout (AmyUI)")
+                return False
             
         except NoSuchElementException:
             pass
@@ -307,23 +353,18 @@ class DataExtractor:
                     driver.execute_script("arguments[0].click();", btn)
                     logger.debug("Clicked next page button - JS click (generic)")
             
-            time.sleep(random.uniform(2.5, 3.5))
+            # Wait for AJAX pagination with improved detection
+            time.sleep(random.uniform(1.5, 2.5))  # Initial buffer for AJAX to start
             
-            for verify_attempt in range(3):
-                try:
-                    WebDriverWait(driver, 12).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr"))
-                    )
-                    logger.debug(f"Table verified after pagination (generic) - attempt {verify_attempt + 1}")
-                    time.sleep(random.uniform(0.5, 1.0))
-                    return True
-                except TimeoutException:
-                    if verify_attempt < 2:
-                        logger.warning(f"Table verification timeout (generic), retry {verify_attempt + 1}/3")
-                        time.sleep(2)
-                    else:
-                        logger.warning("Table did not reload after click (generic) - all retries exhausted")
-                        return False
+            # Use new AJAX completion detection
+            ajax_success = DataExtractor._wait_for_ajax_complete(driver, timeout=15)
+            if ajax_success:
+                logger.debug("AJAX pagination completed successfully (generic)")
+                time.sleep(random.uniform(0.5, 1.0))
+                return True
+            else:
+                logger.warning("AJAX pagination timeout (generic)")
+                return False
             
         except NoSuchElementException:
             pass
@@ -477,14 +518,14 @@ class DataExtractor:
                         logger.warning(f"{page_name}: driver disconnected at page {page_num}")
                         break
 
-                    # Memory check
-                    if not DataExtractor._check_chrome_memory(max_memory_percent=90.0):
+                    # Memory check - slightly reduced threshold for safety
+                    if not DataExtractor._check_chrome_memory(max_memory_percent=85.0):  # Reduced from 90 to 85
                         logger.warning(f"{page_name}: Chrome memory too high, stopping pagination")
                         break
 
                     # Extract current page with retry mechanism
                     retry_count = 0
-                    max_page_retries = 3
+                    max_page_retries = 5  # Increased from 3 to 5
                     page_extracted = False
 
                     while retry_count < max_page_retries and not page_extracted:
@@ -496,9 +537,10 @@ class DataExtractor:
                             page_extracted = True
 
                             # Track consecutive empty pages to break infinite loops
+                            # Increased threshold to handle temporary glitches
                             if len(page_records) == 0:
                                 consecutive_empty += 1
-                                if consecutive_empty >= 2:
+                                if consecutive_empty >= 5:  # Increased from 2 to 5
                                     logger.warning(
                                         f"{page_name}: {consecutive_empty} consecutive empty pages, "
                                         f"stopping pagination to avoid infinite loop"
@@ -512,11 +554,86 @@ class DataExtractor:
                             has_next = DataExtractor._has_next_page(driver)
                             if has_next:
                                 logger.debug(f"{page_name}: found next button, clicking page {page_num + 1}")
-                                click_success = DataExtractor._click_next_page(driver)
+                                
+                                # Retry mechanism for click with exponential backoff
+                                max_click_attempts = 3
+                                click_success = False
+                                
+                                for click_attempt in range(max_click_attempts):
+                                    click_success = DataExtractor._click_next_page(driver)
+                                    
+                                    if click_success:
+                                        break
+                                    else:
+                                        # Click failed (AJAX timeout) - likely rate limited
+                                        if click_attempt < max_click_attempts - 1:
+                                            backoff_delay = (click_attempt + 1) * 5  # 5s, 10s, 15s
+                                            logger.warning(
+                                                f"{page_name}: AJAX timeout on attempt {click_attempt + 1}/{max_click_attempts}, "
+                                                f"backing off for {backoff_delay}s before retry"
+                                            )
+                                            time.sleep(backoff_delay)
+                                            
+                                            # Try to reset state by scrolling
+                                            try:
+                                                driver.execute_script("window.scrollTo(0, 0);")
+                                                time.sleep(1)
+                                            except Exception:
+                                                pass
+                                        else:
+                                            logger.error(f"{page_name}: all {max_click_attempts} click attempts failed")
+                                
                                 if click_success:
                                     page_num += 1
+                                    
+                                    # Brief pause every 10 pages to avoid overwhelming the server
+                                    if page_num % 10 == 0:
+                                        logger.info(f"{page_name}: reached page {page_num}, taking brief pause...")
+                                        time.sleep(random.uniform(5.0, 8.0))
                                 else:
-                                    logger.warning(f"{page_name}: failed to click next button, stopping pagination")
+                                    # All click attempts failed - determine why
+                                    logger.warning(f"{page_name}: failed to click next button after {max_click_attempts} attempts")
+                                    
+                                    # Check if we're actually at the end or being throttled
+                                    try:
+                                        # If next button is disabled, we're at the end (legitimate)
+                                        next_li = driver.find_element(By.CSS_SELECTOR, "li.am-pagination-next")
+                                        classes = next_li.get_attribute("class") or ""
+                                        if "am-disabled" in classes or "disabled" in classes:
+                                            logger.info(f"{page_name}: next button disabled - reached end of data")
+                                            pagination_complete = True
+                                            break
+                                        else:
+                                            logger.error(f"{page_name}: next button exists but AJAX not responding - likely rate limited/blocked")
+                                    except Exception:
+                                        logger.warning(f"{page_name}: could not determine pagination status")
+                                    
+                                    # FALLBACK: Try alternative pagination method if available
+                                    # Some websites use page number in URL or have direct page input
+                                    logger.info(f"{page_name}: attempting fallback pagination method...")
+                                    try:
+                                        # Try to find page number input field
+                                        page_input = driver.find_element(By.CSS_SELECTOR, "input[type='text'].am-pagination-page")
+                                        if page_input:
+                                            next_page_num = page_num + 1
+                                            page_input.clear()
+                                            page_input.send_keys(str(next_page_num))
+                                            # Find and click "go" button
+                                            go_btn = driver.find_element(By.CSS_SELECTOR, "button.am-pagination-go")
+                                            go_btn.click()
+                                            logger.info(f"{page_name}: used page input fallback to jump to page {next_page_num}")
+                                            time.sleep(random.uniform(3, 5))
+                                            
+                                            # Verify fallback worked
+                                            if DataExtractor._wait_for_ajax_complete(driver, timeout=15):
+                                                logger.info(f"{page_name}: fallback method succeeded")
+                                                page_num += 1
+                                                continue  # Continue pagination loop
+                                            else:
+                                                logger.warning(f"{page_name}: fallback method also timed out")
+                                    except Exception as fallback_err:
+                                        logger.debug(f"{page_name}: fallback pagination not available: {fallback_err}")
+                                    
                                     pagination_complete = True
                                     break
                             else:
